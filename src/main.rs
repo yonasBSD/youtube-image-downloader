@@ -306,3 +306,143 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\nDownload process finished!");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    const MOCK_API_KEY: &str = "test_api_key";
+    const MOCK_CHANNEL_ID: &str = "UC_test_channel_id";
+    const MOCK_USERNAME: &str = "testuser";
+    const MOCK_HANDLE: &str = "testhandle";
+    const MOCK_UPLOADS_ID: &str = "UU_test_uploads_id";
+    const MOCK_VIDEO_ID_1: &str = "video1";
+    const MOCK_VIDEO_ID_2: &str = "video2";
+
+    #[tokio::test]
+    async fn test_get_channel_id_from_handle_url() {
+        let client = Client::new();
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock(
+                "GET",
+                &*format!(
+                    "/youtube/v3/search?part=id&q={}&type=channel&key={}",
+                    MOCK_HANDLE, MOCK_API_KEY
+                ),
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"items": [{"id": {"channelId": MOCK_CHANNEL_ID}}]}).to_string())
+            .create_async()
+            .await;
+
+        // Pass the mock server's URL to the function
+        let channel_url = format!("http://any.url/@{}", MOCK_HANDLE);
+        let result =
+            get_channel_id_from_url(&client, MOCK_API_KEY, &channel_url, &server.url()).await;
+
+        mock.assert_async().await;
+        assert_eq!(result.unwrap(), MOCK_CHANNEL_ID);
+    }
+
+    #[tokio::test]
+    async fn test_get_uploads_playlist_id() {
+        let client = Client::new();
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("GET", &*format!("/youtube/v3/channels?part=contentDetails&id={}&key={}", MOCK_CHANNEL_ID, MOCK_API_KEY))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"items": [{"contentDetails": {"relatedPlaylists": {"uploads": MOCK_UPLOADS_ID}}}]}).to_string())
+            .create_async().await;
+
+        let result =
+            get_uploads_playlist_id(&client, MOCK_API_KEY, MOCK_CHANNEL_ID, &server.url()).await;
+
+        mock.assert_async().await;
+        assert_eq!(result.unwrap(), MOCK_UPLOADS_ID);
+    }
+
+    #[tokio::test]
+    async fn test_get_all_video_ids_with_pagination() {
+        let client = Client::new();
+        let next_page_token = "nextPageToken123";
+        let mut server = mockito::Server::new_async().await;
+
+        let mock1 = server.mock("GET", &*format!("/youtube/v3/playlistItems?part=contentDetails&playlistId={}&key={}&maxResults=50", MOCK_UPLOADS_ID, MOCK_API_KEY))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"nextPageToken": next_page_token, "items": [{"contentDetails": {"videoId": MOCK_VIDEO_ID_1}}]}).to_string())
+            .create_async().await;
+
+        let mock2 = server.mock("GET", &*format!("/youtube/v3/playlistItems?part=contentDetails&playlistId={}&key={}&maxResults=50&pageToken={}", MOCK_UPLOADS_ID, MOCK_API_KEY, next_page_token))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json!({"items": [{"contentDetails": {"videoId": MOCK_VIDEO_ID_2}}]}).to_string())
+            .create_async().await;
+
+        let result = get_all_video_ids(&client, MOCK_API_KEY, MOCK_UPLOADS_ID, &server.url()).await;
+
+        mock1.assert_async().await;
+        mock2.assert_async().await;
+        assert_eq!(result.unwrap(), vec![MOCK_VIDEO_ID_1, MOCK_VIDEO_ID_2]);
+    }
+
+    #[tokio::test]
+    async fn test_download_thumbnail_success() {
+        let client = Client::new();
+        let temp_dir = tempdir().unwrap();
+        let output_dir = temp_dir.path().to_str().unwrap();
+        let image_bytes = b"fake_image_data";
+        let mut server = mockito::Server::new_async().await;
+
+        // Mock a simple path on the server
+        let mock = server
+            .mock("GET", "/thumbnail.jpg")
+            .with_status(200)
+            .with_body(image_bytes)
+            .create_async()
+            .await;
+
+        // Construct the full URL to the mock server's path
+        let test_thumbnail_url = format!("{}{}", server.url(), "/thumbnail.jpg");
+
+        let result =
+            download_thumbnail(&client, MOCK_VIDEO_ID_1, &test_thumbnail_url, output_dir).await;
+
+        mock.assert_async().await; // This will now pass!
+        assert!(result.is_ok());
+
+        let file_path = Path::new(output_dir).join(format!("{}.jpg", MOCK_VIDEO_ID_1));
+        assert!(file_path.exists());
+        let contents = fs::read(file_path).await.unwrap();
+        assert_eq!(contents, image_bytes);
+    }
+
+    #[tokio::test]
+    async fn test_download_thumbnail_failure() {
+        let client = Client::new();
+        let temp_dir = tempdir().unwrap();
+        let output_dir = temp_dir.path().to_str().unwrap();
+        let mut server = mockito::Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/thumbnail.jpg")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let test_thumbnail_url = format!("{}{}", server.url(), "/thumbnail.jpg");
+
+        let result =
+            download_thumbnail(&client, MOCK_VIDEO_ID_1, &test_thumbnail_url, output_dir).await;
+
+        mock.assert_async().await; // This will now pass!
+        assert!(result.is_ok());
+
+        let file_path = Path::new(output_dir).join(format!("{}.jpg", MOCK_VIDEO_ID_1));
+        assert!(!file_path.exists());
+    }
+}
