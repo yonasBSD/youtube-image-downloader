@@ -116,8 +116,16 @@ async fn get_channel_id_from_url(
             "https://www.googleapis.com/youtube/v3/search?part=id&q={}&type=channel&key={}",
             handle, api_key
         );
-        let response = client.get(&search_url).send().await?.json::<SearchListResponse>().await?;
-        return response.items.into_iter().next()
+        let response = client
+            .get(&search_url)
+            .send()
+            .await?
+            .json::<SearchListResponse>()
+            .await?;
+        return response
+            .items
+            .into_iter()
+            .next()
             .map(|item| item.id.channel_id)
             .ok_or_else(|| format!("Could not find a channel ID for handle: {}", handle).into());
     }
@@ -135,21 +143,33 @@ async fn get_channel_id_from_url(
 
         // If it's a legacy /user/username URL, we need to look it up.
         if type_part == "user" {
-            println!("Found legacy username: {}. Searching for channel ID...", identifier);
+            println!(
+                "Found legacy username: {}. Searching for channel ID...",
+                identifier
+            );
             let channel_list_url = format!(
                 "https://www.googleapis.com/youtube/v3/channels?part=id&forUsername={}&key={}",
                 identifier, api_key
             );
-            let response = client.get(&channel_list_url).send().await?.json::<ChannelListResponse>().await?;
-            return response.items.into_iter().next()
+            let response = client
+                .get(&channel_list_url)
+                .send()
+                .await?
+                .json::<ChannelListResponse>()
+                .await?;
+            return response
+                .items
+                .into_iter()
+                .next()
                 .and_then(|item| item.id)
-                .ok_or_else(|| format!("Could not find a channel ID for username: {}", identifier).into());
+                .ok_or_else(|| {
+                    format!("Could not find a channel ID for username: {}", identifier).into()
+                });
         }
     }
 
     Err("Unsupported YouTube channel URL format. Please use a URL like https://www.youtube.com/@handle, https://www.youtube.com/channel/ID, or https://www.youtube.com/user/username".into())
 }
-
 
 /// Fetches the uploads playlist ID for a given YouTube channel ID.
 async fn get_uploads_playlist_id(
@@ -161,7 +181,12 @@ async fn get_uploads_playlist_id(
         "https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id={}&key={}",
         channel_id, api_key
     );
-    let response = client.get(&url).send().await?.json::<ChannelListResponse>().await?;
+    let response = client
+        .get(&url)
+        .send()
+        .await?
+        .json::<ChannelListResponse>()
+        .await?;
 
     if let Some(item) = response.items.into_iter().next() {
         if let Some(details) = item.content_details {
@@ -238,8 +263,8 @@ async fn download_thumbnail(
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    let api_key = env::var("YOUTUBE_API_KEY")
-        .map_err(|_| "YOUTUBE_API_KEY environment variable not set.")?;
+    let api_key =
+        env::var("YOUTUBE_API_KEY").map_err(|_| "YOUTUBE_API_KEY environment variable not set.")?;
 
     let client = Client::new();
 
@@ -251,8 +276,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Resolved to channel ID: {}", channel_id);
 
     println!("Fetching uploads playlist ID for channel...");
-    let uploads_playlist_id =
-        get_uploads_playlist_id(&client, &api_key, &channel_id).await?;
+    let uploads_playlist_id = get_uploads_playlist_id(&client, &api_key, &channel_id).await?;
     println!("Found uploads playlist ID: {}", uploads_playlist_id);
 
     println!("Fetching all video IDs from the playlist...");
